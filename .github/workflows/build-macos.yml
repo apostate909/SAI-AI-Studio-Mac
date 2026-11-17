@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(uname -m)" = "$BUILD_ARCH"
-          shasum -a 256 -c "$SOURCE_ARCHIVE.sha256"
+          tr -d '\r' < "$SOURCE_ARCHIVE.sha256" | shasum -a 256 -c -
           mkdir -p source
           unzip -q "$SOURCE_ARCHIVE" -d source
           test -f source/SAI-AI-Studio-Mac/macOS/license-bootstrap.json
