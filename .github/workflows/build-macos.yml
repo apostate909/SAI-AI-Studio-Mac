@@ -31,7 +31,7 @@ jobs:
             rid: osx-x64
             arch: x86_64
     env:
-      SOURCE_ARCHIVE: SAI-AI-Studio-Mac-Source-20261117-113927.zip
+      SOURCE_ARCHIVE: SAI-AI-Studio-Mac-Source-20261117-114407.zip
       BUILD_RID: ${{ matrix.rid }}
       BUILD_ARCH: ${{ matrix.arch }}
       BUNDLE_BUILD: ${{ github.run_number }}
