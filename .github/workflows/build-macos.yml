@@ -1,0 +1,109 @@
+name: Build macOS app
+
+"on":
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/build-macos.yml
+      - SAI-AI-Studio-Mac-Source-*.zip*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            rid: osx-arm64
+            arch: arm64
+          - runner: macos-15-intel
+            rid: osx-x64
+            arch: x86_64
+    env:
+      SOURCE_ARCHIVE: SAI-AI-Studio-Mac-Source-20261117-111203.zip
+      BUILD_RID: ${{ matrix.rid }}
+      BUILD_ARCH: ${{ matrix.arch }}
+      BUNDLE_BUILD: ${{ github.run_number }}
+      VERIFY_NATIVE: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - name: Check out source package
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 8.0.x
+      - name: Verify and extract complete Mac source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "$BUILD_ARCH"
+          shasum -a 256 -c "$SOURCE_ARCHIVE.sha256"
+          mkdir -p source
+          unzip -q "$SOURCE_ARCHIVE" -d source
+          test -f source/SAI-AI-Studio-Mac/macOS/license-bootstrap.json
+          printf '%s\n' '{"sdk":{"version":"8.0.100","rollForward":"latestFeature","allowPrerelease":false}}' > source/SAI-AI-Studio-Mac/global.json
+          xcrun swiftc --version
+      - name: Prepare temporary CI Keychain for native licensing test
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain_path="$RUNNER_TEMP/sai-ci.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" /Library/Keychains/System.keychain
+      - name: Test, compile Swift and C#, sign and package
+        working-directory: source/SAI-AI-Studio-Mac
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash macOS/build-mac.sh "$BUILD_RID" 1.1.11.4 2>&1 | tee build.log
+      - name: Collect distributable packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          outputs=(source/SAI-AI-Studio-Mac/artifacts/mac-*)
+          test "${#outputs[@]}" -eq 1
+          output="${outputs[0]}"
+          mkdir -p deliverables
+          cp "$output"/SAI-AI-Studio-*.zip "$output"/SAI-AI-Studio-*.dmg "$output"/SAI-AI-Studio-*.ccx deliverables/
+          cp "$output/Install Photoshop Bridge.command" deliverables/
+          cp "$output/README.md" deliverables/
+          printf 'Commit: %s\nRuntime: %s\nSigning: ad-hoc (not Apple notarized)\nNative Keychain self-test: passed\n' "$GITHUB_SHA" "$BUILD_RID" > deliverables/BUILD-INFO.txt
+          (cd deliverables && shasum -a 256 *.zip *.dmg *.ccx > SHA256SUMS.txt)
+          echo "### Mac build: $BUILD_RID" >> "$GITHUB_STEP_SUMMARY"
+          echo "C# tests, Swift compilation, embedded licensing, Keychain self-test and ad-hoc signature verification passed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the artifact below. Developer ID signing, notarization and interactive Photoshop testing remain required for formal distribution." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Mac app, DMG and Photoshop plugin
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: SAI-AI-Studio-Mac-${{ matrix.rid }}
+          path: deliverables/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: build-log-${{ matrix.rid }}
+          path: source/SAI-AI-Studio-Mac/build.log
+          if-no-files-found: ignore
+          retention-days: 7
